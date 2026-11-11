@@ -350,10 +350,10 @@
       if (surf === 'easy') T = T.filter((t) => t.cls === 'easy');
       if (surf === 'natural') T = T.filter((t) => t.cls === 'nat');
       if (favOnly) T = T.filter((t) => S.favs[t.park.key]);
-      const nm = (t) => (t.name === '__unnamed' ? '~' : t.name);
+      const unn = (t) => (t.name === '__unnamed' ? 1 : 0);
       if (sort === 'dist' && c) T.sort((x, y) => dist(x) - dist(y));
       if (sort === 'len') T.sort((x, y) => y.mi - x.mi);
-      if (byName) T.sort((x, y) => nm(x).localeCompare(nm(y)) || x.park.name.localeCompare(y.park.name));
+      if (byName) T.sort((x, y) => unn(x) - unn(y) || x.name.localeCompare(y.name) || x.park.name.localeCompare(y.park.name));
       $('#areaList').replaceChildren(...T.slice(0, 600).map(trailCard));
     }
     renderSaved();
@@ -659,7 +659,7 @@
       el('div', { class: 'fact' }, [el('b', { text: fmtMi(grp.len) }), el('span', { text: lenLabel })]),
       el('div', { class: 'fact' }, [el('b', { text: grp.pieces > 1 ? 'Not joined up' : sh[0] }), el('span', { text: grp.pieces > 1 ? `Drawn in ${grp.pieces} separate pieces` : sh[1] })]),
       el('div', { class: 'fact' }, [el('b', { text: difficulty(grp.cls) }), el('span', { text: 'Difficulty (estimate)' })]),
-      el('div', { class: 'fact' }, [el('b', { text: [...grp.use].join(', ') || 'Not listed' }), el('span', { text: 'Allowed use' })]),
+      el('div', { class: 'fact wide' }, [el('b', { text: [...grp.use].join(', ').replace(/\//g, ', ') || 'Not listed' }), el('span', { text: 'Allowed use' })]),
       el('div', { class: 'fact wide' }, [el('b', { text: [...grp.surfRaw].join(', ') || 'Not listed' }), el('span', { text: 'Surface' })]),
     ];
     const start = nearestPoi(m, grp, ['parking']) || nearestPoi(m, grp, ['trailhead']);
