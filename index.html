@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Trail Mapper</title>
-<meta name="description" content="Find nature trails in South Florida, see each trail's map, and get warned when you drift off the path.">
+<meta name="description" content="South Florida state and county park trails from Florida's official trail inventory. See each trail's map and get warned when you drift off the path.">
 <meta name="theme-color" content="#1f4a3a">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
@@ -17,7 +17,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@600;700&display=swap">
 <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
-<link rel="stylesheet" href="app.css">
+<link rel="stylesheet" href="app.css?v=4">
 </head>
 <body>
 
@@ -37,13 +37,13 @@
       <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M5 24c5-1 6-7 11-8s7-6 11-10" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/><circle cx="27" cy="6" r="3" fill="var(--sun)"/></svg>
       <h1>Trail Mapper</h1>
     </div>
-    <p class="tagline">Nature trails across South Florida, from OpenStreetMap.</p>
+    <p class="tagline">State and county park trails across South Florida, from Florida's official trail inventory.</p>
   </header>
 
   <div class="finder">
     <form id="searchForm" class="search" autocomplete="off">
-      <label for="searchInput" class="sr">Search a park, city or zip</label>
-      <input id="searchInput" type="search" placeholder="Park, city or zip in South Florida" enterkeyhint="search">
+      <label for="searchInput" class="sr">Search a park, trail, city or zip</label>
+      <input id="searchInput" type="search" placeholder="Park, trail, city or zip" enterkeyhint="search">
       <button class="btn btn-primary" type="submit">Search</button>
     </form>
     <div class="row-wrap">
@@ -55,6 +55,7 @@
         <button class="chip" data-r="8047" type="button">5 mi</button>
         <button class="chip" data-r="24140" type="button">15 mi</button>
         <button class="chip" data-r="48280" type="button">30 mi</button>
+        <button class="chip" data-r="0" type="button">All South Florida</button>
       </div>
     </div>
     <div class="seg" role="group" aria-label="List">
@@ -62,6 +63,13 @@
       <button type="button" data-mode="parks" aria-pressed="false">Parks and preserves</button>
     </div>
     <div class="row-wrap filters">
+      <label class="sel"><span>Run by</span>
+        <select id="whoFilter">
+          <option value="both">State and county</option>
+          <option value="state">State lands only</option>
+          <option value="county">County only</option>
+        </select>
+      </label>
       <label class="sel"><span>Surface</span>
         <select id="surfFilter">
           <option value="any">Any</option>
@@ -91,8 +99,8 @@
   </section>
 
   <footer class="foot">
-    <p>Trail lines come from OpenStreetMap volunteers and can be missing or out of date. Always follow park maps, signs and trail markers.</p>
-    <p>Map data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a>.</p>
+    <p>Trail lines come from the Florida Department of Environmental Protection's Office of Greenways &amp; Trails inventory and are drawn exactly as published. Trails can close or change, so always follow park maps, signs and trail markers.</p>
+    <p>Map tiles, parking and restrooms © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a>.</p>
   </footer>
 </section>
 
@@ -161,14 +169,14 @@
       <h3>Trails here</h3>
       <ol id="trailList" class="trail-list"></ol>
 
-      <h3 id="areaFactsHead">About this area</h3>
+      <h3 id="areaFactsHead">About this park</h3>
       <div id="facts" class="facts"></div>
 
       <div class="legend" aria-label="Map legend">
         <span><i class="sw sw-board"></i>Boardwalk</span>
         <span><i class="sw sw-paved"></i>Paved</span>
         <span><i class="sw sw-nat"></i>Natural ground</span>
-        <span><i class="sw sw-unk"></i>Surface not mapped</span>
+        <span><i class="sw sw-unk"></i>Surface not listed</span>
         <span><i class="dot dot-p">P</i>Parking</span>
       </div>
 
@@ -183,6 +191,6 @@
 </section>
 
 <script src="vendor/leaflet/leaflet.js"></script>
-<script src="app.js"></script>
+<script src="app.js?v=4"></script>
 </body>
 </html>

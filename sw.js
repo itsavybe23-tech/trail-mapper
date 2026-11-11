@@ -1,11 +1,12 @@
-/* Trail Mapper service worker: keeps the app itself and the map pieces you viewed for offline use. */
-const SHELL = 'tm-shell-v2';
+/* Trail Mapper service worker: keeps the app itself and the map pieces you viewed for offline use.
+   The app's own files come from the network first, so an update is never mixed with an old copy. */
+const SHELL = 'tm-shell-v3';
 const TILES = 'tm-tiles-v1';
 const MAX_TILES = 4000;
-const SHELL_FILES = ['./', 'index.html', 'app.css', 'app.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'icon-180.png', 'vendor/leaflet/leaflet.js', 'vendor/leaflet/leaflet.css'];
+const SHELL_FILES = ['./', 'index.html', 'app.css?v=4', 'app.js?v=4', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'icon-180.png', 'vendor/leaflet/leaflet.js', 'vendor/leaflet/leaflet.css'];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(SHELL).then((c) => c.addAll(SHELL_FILES)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(SHELL).then((c) => c.addAll(SHELL_FILES.map((f) => new Request(f, { cache: 'reload' })))).catch(() => {}).then(() => self.skipWaiting()));
 });
 self.addEventListener('activate', (e) => {
   e.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((k) => k.startsWith('tm-shell-') && k !== SHELL).map((k) => caches.delete(k)))).then(() => self.clients.claim()));
@@ -36,21 +37,16 @@ self.addEventListener('fetch', (e) => {
     }));
     return;
   }
-  if (url.hostname === 'fonts.googleapis.com' || url.hostname === 'fonts.gstatic.com') {
-    e.respondWith(caches.open(SHELL).then(async (c) => {
-      const hit = await c.match(req); if (hit) return hit;
-      try { const res = await fetch(req); if (res.ok || res.type === 'opaque') c.put(req, res.clone()); return res; } catch (err) { return new Response('', { status: 504 }); }
-    }));
-    return;
-  }
   if (url.origin === self.location.origin && !url.pathname.includes('__tm-data/')) {
-    // The app itself: answer from the saved copy, refresh it in the background.
+    // The app itself: newest copy from the network, the saved copy only when offline.
     e.respondWith(caches.open(SHELL).then(async (c) => {
-      const hit = await c.match(req, { ignoreSearch: true });
-      const net = fetch(req).then((res) => { if (res.ok) c.put(req, res.clone()); return res; }).catch(() => null);
-      if (hit) { e.waitUntil(net); return hit; }
-      const res = await net;
-      return res || (await c.match('index.html')) || new Response('Offline', { status: 503 });
+      try {
+        const res = await fetch(req, { cache: 'no-cache' });
+        if (res.ok) c.put(req, res.clone());
+        return res;
+      } catch (err) {
+        return (await c.match(req)) || (await c.match(req, { ignoreSearch: true })) || (req.mode === 'navigate' && (await c.match('index.html'))) || new Response('Offline', { status: 503 });
+      }
     }));
   }
 });
