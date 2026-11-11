@@ -243,3 +243,16 @@ h1, h2, h3 { font-family: var(--f-display); letter-spacing: .01em; text-wrap: ba
   .sheet { left: auto; right: 16px; bottom: 16px; width: 400px; max-height: calc(100% - 100px); border-radius: 18px; }
   .sheet[data-open="false"] { transform: none; }
 }
+
+/* ===== trail list toggle, trail detail, hike stats ===== */
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; padding: 3px; background: var(--surface); justify-self: start; }
+.seg button { border: 0; background: transparent; color: var(--fg); font: 600 15px var(--f-body); padding: 8px 16px; border-radius: 999px; min-height: 40px; cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--pine); color: var(--pine-fg); }
+.tag.park { font-weight: 600; }
+.trail-detail { display: grid; gap: 8px; border: 2px solid var(--sun); border-radius: 14px; padding: 12px; background: var(--surface); }
+.trail-detail h3 { font-size: 24px; line-height: 1.1; overflow-wrap: anywhere; }
+.trail-detail #tdPark { margin: -4px 0 0; font-size: 14px; }
+.linkbtn { border: 0; background: transparent; color: var(--water); font: 600 14px var(--f-body); padding: 4px 0; justify-self: start; cursor: pointer; min-height: 32px; }
+.notes { margin: 0; padding-left: 18px; display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+.hike { display: grid; gap: 8px; background: var(--surface-2); border-radius: 10px; padding: 10px 12px; }
+.hike p { margin: 0; font-weight: 500; font-variant-numeric: tabular-nums; }

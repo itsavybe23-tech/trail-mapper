@@ -1,5 +1,5 @@
 /* Trail Mapper service worker: keeps the app itself and the map pieces you viewed for offline use. */
-const SHELL = 'tm-shell-v1';
+const SHELL = 'tm-shell-v2';
 const TILES = 'tm-tiles-v1';
 const MAX_TILES = 4000;
 const SHELL_FILES = ['./', 'index.html', 'app.css', 'app.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'icon-180.png', 'vendor/leaflet/leaflet.js', 'vendor/leaflet/leaflet.css'];

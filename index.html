@@ -57,6 +57,10 @@
         <button class="chip" data-r="48280" type="button">30 mi</button>
       </div>
     </div>
+    <div class="seg" role="group" aria-label="List">
+      <button type="button" data-mode="trails" aria-pressed="true">Trails</button>
+      <button type="button" data-mode="parks" aria-pressed="false">Parks and preserves</button>
+    </div>
     <div class="row-wrap filters">
       <label class="sel"><span>Surface</span>
         <select id="surfFilter">
@@ -123,12 +127,22 @@
     <div class="sheet-body">
       <p id="areaStatus" class="status" aria-live="polite"></p>
 
-      <div class="actions">
-        <button id="trackBtn" class="btn btn-primary" type="button">Start hike</button>
-        <button id="homeBtn" class="btn btn-outline" type="button">Way back to parking</button>
+      <div id="trailDetail" class="trail-detail" hidden>
+        <button id="allTrailsBtn" class="linkbtn" type="button">‹ All trails in this park</button>
+        <h3 id="tdName"></h3>
+        <p id="tdPark" class="muted"></p>
+        <div id="tdFacts" class="facts"></div>
+        <ul id="tdNotes" class="notes"></ul>
       </div>
 
-      <div id="facts" class="facts"></div>
+      <div class="actions">
+        <button id="trackBtn" class="btn btn-primary" type="button">Start trail</button>
+        <button id="homeBtn" class="btn btn-outline" type="button">Way back to parking</button>
+      </div>
+      <div id="hikeStats" class="hike" aria-live="polite" hidden>
+        <p id="hikeText"></p>
+        <button id="walkGpx" class="btn btn-outline" type="button" hidden>Download my walk (GPX)</button>
+      </div>
 
       <div class="field">
         <label for="warnTarget">Warn me when I leave</label>
@@ -147,6 +161,9 @@
       <h3>Trails here</h3>
       <ol id="trailList" class="trail-list"></ol>
 
+      <h3 id="areaFactsHead">About this area</h3>
+      <div id="facts" class="facts"></div>
+
       <div class="legend" aria-label="Map legend">
         <span><i class="sw sw-board"></i>Boardwalk</span>
         <span><i class="sw sw-paved"></i>Paved</span>
@@ -157,7 +174,7 @@
 
       <div class="actions small">
         <a id="dirLink" class="btn btn-outline" target="_blank" rel="noopener">Directions to parking</a>
-        <button id="gpxBtn" class="btn btn-outline" type="button">Download GPX</button>
+        <button id="gpxBtn" class="btn btn-outline" type="button">Download trail GPX</button>
         <button id="refreshBtn" class="btn btn-ghost" type="button">Refresh trail data</button>
       </div>
       <p class="muted fine">Before you go, open this map with signal and zoom around the trails once. The app keeps the trail lines and the map pieces you viewed for offline use.</p>
