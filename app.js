@@ -35,7 +35,7 @@
   const COUNTY_SQL = "(MANAGING_AGENCY LIKE '%County%')";
   const CITY_SQL = "(MANAGING_AGENCY LIKE 'City of%' OR MANAGING_AGENCY LIKE 'Town of%' OR MANAGING_AGENCY LIKE 'Village of%')";
   const FED_SQL = "(MANAGING_AGENCY LIKE 'U.S.%' OR MANAGING_AGENCY LIKE 'US %' OR MANAGING_AGENCY LIKE 'National Park%')";
-  const FOOT_SQL = "(TYPE IS NULL OR (TYPE NOT LIKE 'Motorized%' AND TYPE <> 'Paddling'))";
+  const FOOT_SQL = "(TYPE IS NULL OR (TYPE NOT LIKE 'Motorized%' AND TYPE NOT LIKE '%Off-Highway%' AND TYPE <> 'Paddling'))";
   // Some trails cross county lines and list two or more counties, so match each county inside the list.
   const COUNTY_ANY = '(' + ['Dade', 'Broward', 'Palm Beach', 'Monroe', 'Collier', 'Lee', 'Martin', 'Lucie', 'Hendry', 'Glades', 'Charlotte', 'Okeechobee'].map((c) => `COUNTY LIKE '%${c}%'`).join(' OR ') + ')';
   const TRIM = (f) => `TRIM(BOTH ' ' FROM ${f})`;
@@ -124,12 +124,13 @@
       return feats;
     }
     const countParams = Object.assign({}, base, { returnCountOnly: 'true', returnGeometry: 'false' }); delete countParams.orderByFields;
-    const n = +(await post(url, countParams, 20000)).count || 0;
-    const pages = [];
     let done = 0;
-    for (let offset = 0; offset < Math.max(n, 1); offset += 1000) {
-      pages.push(post(url, Object.assign({}, base, { resultOffset: String(offset), resultRecordCount: '1000' })).then((j) => { done += (j.features || []).length; if (onPage) onPage(done); return j.features || []; }));
-    }
+    const page = (offset) => post(url, Object.assign({}, base, { resultOffset: String(offset), resultRecordCount: '1000' })).then((j) => { done += (j.features || []).length; if (onPage) onPage(done); return j.features || []; });
+    // The first page goes out with the count, so a small answer takes one round trip, not two.
+    const [cnt, first] = await Promise.all([post(url, countParams, 20000), page(0)]);
+    const n = +cnt.count || 0;
+    const pages = [Promise.resolve(first)];
+    for (let offset = 1000; offset < n; offset += 1000) pages.push(page(offset));
     return (await Promise.all(pages)).flat();
   }
 
@@ -476,9 +477,11 @@ foreach.c->.p(
       if (!all) Object.assign(params, { geometry: `${lon.toFixed(5)},${lat.toFixed(5)}`, geometryType: 'esriGeometryPoint', inSR: '4326', distance: String(S.radius), units: 'esriSRUnit_Meter', spatialRel: 'esriSpatialRelIntersects' });
       const progress = (n) => { if (!hit && token === S.discToken) findStatus(`Loading trails within ${where2}... ${n} trail pieces so far.`); };
       const wantPbc = !LEGACY && (who === 'all' || who === 'county') && (all || hav(lat, lon, 26.65, -80.45) < S.radius + 60000);
+      const tm = {};
+      const timed = (k, pr) => pr.then((v) => { tm[k] = secs(t0); return v; });
       const [feats, pbcAll] = await Promise.all([
-        trailQuery(params, progress, LEGACY),
-        wantPbc ? pbcIndex().catch(() => []) : Promise.resolve([]),
+        timed('state', trailQuery(params, progress, LEGACY)),
+        wantPbc ? timed('county', pbcIndex().catch(() => [])) : Promise.resolve([]),
       ]);
       if (token !== S.discToken) return;
       const state = buildParks(feats.map(slim).filter((f) => LEGACY || sfCounty(f.rawCounty)));
@@ -486,7 +489,7 @@ foreach.c->.p(
       S.parks = mergeOfficial(state, pbc);
       await cachePut(key, S.parks);
       renderList();
-      findStatus((S.parks.length ? listSummary(where2) : `No trails found within ${where2}. Try a bigger radius.`) + (BENCH ? ` Loaded in ${secs(t0)}.` : ''));
+      findStatus((S.parks.length ? listSummary(where2) : `No trails found within ${where2}. Try a bigger radius.`) + (BENCH ? ` Loaded in ${secs(t0)} (state inventory ${tm.state}${tm.county ? ', county natural areas ' + tm.county : ''}).` : ''));
       if (!all && who === 'all') addOsm(lat, lon, where2, token);
     } catch (e) {
       if (!hit) findStatus(`The trail map services didn't answer (${errWord(e)}). Check your signal and try again.`, true);
@@ -580,9 +583,22 @@ foreach.c->.p(
       if (sort === 'dist' && c) T.sort((x, y) => dist(x) - dist(y));
       if (sort === 'len') T.sort((x, y) => y.mi - x.mi);
       if (byName) T.sort((x, y) => unn(x) - unn(y) || x.name.localeCompare(y.name) || x.park.name.localeCompare(y.park.name));
-      $('#areaList').replaceChildren(...T.slice(0, 600).map(trailCard));
+      S.rows = T; S.shown = 0;
+      $('#areaList').replaceChildren();
+      moreRows();
     }
     renderSaved();
+  }
+
+  // Draws the trail list 150 at a time, so a long list shows at once and nothing is left out.
+  function moreRows() {
+    const list = $('#areaList'), T = S.rows || [];
+    const old = list.querySelector('.more'); if (old) old.remove();
+    const next = T.slice(S.shown, S.shown + 150);
+    S.shown += next.length;
+    list.append(...next.map(trailCard));
+    const left = T.length - S.shown;
+    if (left > 0) list.append(el('li', { class: 'more' }, [el('button', { class: 'btn btn-outline', type: 'button', text: `Show ${Math.min(150, left)} more (${left} left)`, onclick: moreRows })]));
   }
 
   function renderSaved() {
