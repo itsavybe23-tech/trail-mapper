@@ -50,7 +50,10 @@
   const DATA_V = 'v5';
   const QS = location.search;
   const BENCH = /[?&]bench\b/.test(QS); // for timing: skip saved data and show how long each load took
-  const LEGACY = /[?&]legacy\b/.test(QS); // for timing: load the list the way the previous version did
+  const LEGACY = /[?&]legacy\b/.test(QS);
+  const qnum = (k, d) => { const m = QS.match(new RegExp('[?&]' + k + '=([0-9.]+)')); return m && BENCH ? m[1] : d; }; // timing knobs, bench only
+  const PAGE = +qnum('ps', '1000');
+  const LIST_OFFSET = qnum('off', '0.005'); // for timing: load the list the way the previous version did
   const COLORS = () => {
     const cs = getComputedStyle(document.documentElement);
     return {
@@ -125,12 +128,12 @@
     }
     const countParams = Object.assign({}, base, { returnCountOnly: 'true', returnGeometry: 'false' }); delete countParams.orderByFields;
     let done = 0;
-    const page = (offset) => post(url, Object.assign({}, base, { resultOffset: String(offset), resultRecordCount: '1000' })).then((j) => { done += (j.features || []).length; if (onPage) onPage(done); return j.features || []; });
+    const page = (offset) => post(url, Object.assign({}, base, { resultOffset: String(offset), resultRecordCount: String(PAGE) })).then((j) => { done += (j.features || []).length; if (onPage) onPage(done); return j.features || []; });
     // The first page goes out with the count, so a small answer takes one round trip, not two.
     const [cnt, first] = await Promise.all([post(url, countParams, 20000), page(0)]);
     const n = +cnt.count || 0;
     const pages = [Promise.resolve(first)];
-    for (let offset = 1000; offset < n; offset += 1000) pages.push(page(offset));
+    for (let offset = PAGE; offset < n; offset += PAGE) pages.push(page(offset));
     return (await Promise.all(pages)).flat();
   }
 
@@ -473,7 +476,7 @@ foreach.c->.p(
     try {
       const params = LEGACY
         ? { where: `(${STATE_SQL} OR ${COUNTY_SQL}) AND ${FOOT_SQL} AND COUNTY IN (${SF_COUNTIES.map((c) => `'${sql(c)}'`).join(',')})`, maxAllowableOffset: '0.0005' }
-        : { where: `${agencySql(who)} AND ${FOOT_SQL} AND ${COUNTY_ANY}`, outFields: LIST_FIELDS, maxAllowableOffset: '0.005', geometryPrecision: '4' };
+        : { where: `${agencySql(who)} AND ${FOOT_SQL} AND ${COUNTY_ANY}`, outFields: LIST_FIELDS, maxAllowableOffset: LIST_OFFSET, geometryPrecision: '4' };
       if (!all) Object.assign(params, { geometry: `${lon.toFixed(5)},${lat.toFixed(5)}`, geometryType: 'esriGeometryPoint', inSR: '4326', distance: String(S.radius), units: 'esriSRUnit_Meter', spatialRel: 'esriSpatialRelIntersects' });
       const progress = (n) => { if (!hit && token === S.discToken) findStatus(`Loading trails within ${where2}... ${n} trail pieces so far.`); };
       const wantPbc = !LEGACY && (who === 'all' || who === 'county') && (all || hav(lat, lon, 26.65, -80.45) < S.radius + 60000);
