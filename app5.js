@@ -53,7 +53,9 @@
   const LEGACY = /[?&]legacy\b/.test(QS);
   const qnum = (k, d) => { const m = QS.match(new RegExp('[?&]' + k + '=([0-9.]+)')); return m && BENCH ? m[1] : d; }; // timing knobs, bench only
   const PAGE = +qnum('ps', '1000');
-  const LIST_OFFSET = qnum('off', '0.005'); // for timing: load the list the way the previous version did
+  const LIST_OFFSET = qnum('off', '0.005');
+  const BOXQ = BENCH && /[?&]box\b/.test(QS); // timing: ask by map area instead of county names
+  const SF_BOX = { xmin: -83.0, ymin: 24.3, xmax: -79.7, ymax: 27.7 }; // for timing: load the list the way the previous version did
   const COLORS = () => {
     const cs = getComputedStyle(document.documentElement);
     return {
@@ -476,7 +478,8 @@ foreach.c->.p(
     try {
       const params = LEGACY
         ? { where: `(${STATE_SQL} OR ${COUNTY_SQL}) AND ${FOOT_SQL} AND COUNTY IN (${SF_COUNTIES.map((c) => `'${sql(c)}'`).join(',')})`, maxAllowableOffset: '0.0005' }
-        : { where: `${agencySql(who)} AND ${FOOT_SQL} AND ${COUNTY_ANY}`, outFields: LIST_FIELDS, maxAllowableOffset: LIST_OFFSET, geometryPrecision: '4' };
+        : { where: `${agencySql(who)} AND ${FOOT_SQL}` + (BOXQ && all ? '' : ` AND ${COUNTY_ANY}`), outFields: LIST_FIELDS, maxAllowableOffset: LIST_OFFSET, geometryPrecision: '4' };
+      if (BOXQ && all) Object.assign(params, { geometry: JSON.stringify(Object.assign({ spatialReference: { wkid: 4326 } }, SF_BOX)), geometryType: 'esriGeometryEnvelope', inSR: '4326', spatialRel: 'esriSpatialRelIntersects' });
       if (!all) Object.assign(params, { geometry: `${lon.toFixed(5)},${lat.toFixed(5)}`, geometryType: 'esriGeometryPoint', inSR: '4326', distance: String(S.radius), units: 'esriSRUnit_Meter', spatialRel: 'esriSpatialRelIntersects' });
       const progress = (n) => { if (!hit && token === S.discToken) findStatus(`Loading trails within ${where2}... ${n} trail pieces so far.`); };
       const wantPbc = !LEGACY && (who === 'all' || who === 'county') && (all || hav(lat, lon, 26.65, -80.45) < S.radius + 60000);
