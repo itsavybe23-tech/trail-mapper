@@ -1,9 +1,9 @@
 /* Trail Mapper service worker: keeps the app itself and the map pieces you viewed for offline use.
    The app's own files come from the network first, so an update is never mixed with an old copy. */
-const SHELL = 'tm-shell-v3';
+const SHELL = 'tm-shell-v4';
 const TILES = 'tm-tiles-v1';
 const MAX_TILES = 4000;
-const SHELL_FILES = ['./', 'index.html', 'app4.css', 'app4.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'icon-180.png', 'vendor/leaflet/leaflet.js', 'vendor/leaflet/leaflet.css'];
+const SHELL_FILES = ['./', 'index.html', 'app5.css', 'app5.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'icon-180.png', 'vendor/leaflet/leaflet.js', 'vendor/leaflet/leaflet.css'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(SHELL).then((c) => c.addAll(SHELL_FILES.map((f) => new Request(f, { cache: 'reload' })))).catch(() => {}).then(() => self.skipWaiting()));

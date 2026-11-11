@@ -1,5 +1,6 @@
-/* Trail Mapper: South Florida state and county park trails from Florida's official trail
-   inventory (FDEP Office of Greenways & Trails, "Existing Trails"). Shows each trail's map,
+/* Trail Mapper: South Florida park and preserve trails from Florida's official trail
+   inventory (FDEP Office of Greenways & Trails, "Existing Trails"), Palm Beach County's natural
+   areas trail map, and OpenStreetMap for nature areas neither covers. Shows each trail's map,
    tracks the hiker's live position, warns when they leave the path and routes them back
    along the trails. No server of its own: trail data comes straight from the state's map
    service and is kept on the phone. Parking and restrooms come from OpenStreetMap when
@@ -26,13 +27,30 @@
     'https://ca.dep.state.fl.us/arcgis/rest/services/OpenData/OGT/MapServer/3/query',
     'https://ags.dep.state.fl.us/arcgis/rest/services/OpenData/OGT/MapServer/3/query',
   ];
-  const OVERPASS = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
+  const OVERPASS = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter', 'https://overpass.private.coffee/api/interpreter'];
   const FIELDS = 'OBJECTID,SEGMENT_NAME,TRAIL_NAME,SURFACE,TYPE,MANAGING_AGENCY,MANAGING_SITE,COUNTY,GIS_MILES,LAST_UPDATE,URL';
-  const STATE_SQL = "(MANAGING_AGENCY LIKE 'FDEP%' OR MANAGING_AGENCY LIKE 'Florida Fish%' OR MANAGING_AGENCY LIKE 'Florida Forest%' OR MANAGING_AGENCY LIKE '%Water Management District')";
+  // The list only needs names, lengths and roughly where each trail is, so it asks for a much lighter copy.
+  const LIST_FIELDS = 'OBJECTID,SEGMENT_NAME,TRAIL_NAME,SURFACE,TYPE,MANAGING_AGENCY,MANAGING_SITE,COUNTY,GIS_MILES';
+  const STATE_SQL = "(MANAGING_AGENCY LIKE 'FDEP%' OR MANAGING_AGENCY LIKE 'Florida %' OR MANAGING_AGENCY LIKE '%Water Management District')";
   const COUNTY_SQL = "(MANAGING_AGENCY LIKE '%County%')";
+  const CITY_SQL = "(MANAGING_AGENCY LIKE 'City of%' OR MANAGING_AGENCY LIKE 'Town of%' OR MANAGING_AGENCY LIKE 'Village of%')";
+  const FED_SQL = "(MANAGING_AGENCY LIKE 'U.S.%' OR MANAGING_AGENCY LIKE 'US %' OR MANAGING_AGENCY LIKE 'National Park%')";
   const FOOT_SQL = "(TYPE IS NULL OR (TYPE NOT LIKE 'Motorized%' AND TYPE <> 'Paddling'))";
+  // Some trails cross county lines and list two or more counties, so match each county inside the list.
+  const COUNTY_ANY = '(' + ['Dade', 'Broward', 'Palm Beach', 'Monroe', 'Collier', 'Lee', 'Martin', 'Lucie', 'Hendry', 'Glades', 'Charlotte', 'Okeechobee'].map((c) => `COUNTY LIKE '%${c}%'`).join(' OR ') + ')';
+  const TRIM = (f) => `TRIM(BOTH ' ' FROM ${f})`;
+  const BLANK = (f) => `(${f} IS NULL OR ${f} = ' ' OR ${TRIM(f)} = '')`;
+  // Palm Beach County's own map of the trails in its natural areas (Environmental Resources Management).
+  const PBC_BASE = 'https://pbcmaps.pbcgov.org/arcgis/rest/services/OpenData/Environment_Open_Data/MapServer/';
+  const PBC_AGENCY = 'Palm Beach County Environmental Resources Management';
+  const PBC_TRAIL_SQL = "CATEGORY = 'TRAIL' AND ELEMENT NOT LIKE 'CANOE%'";
+  const TRAIL_HW = '^(path|footway|track|bridleway|cycleway|steps|pedestrian)$';
+  const NOT_SIDEWALK = '[footway!~"^(sidewalk|crossing|access_aisle|traffic_island)$"][access!~"^(private|no)$"]';
   const DAY = 864e5;
-  const DATA_V = 'v3';
+  const DATA_V = 'v5';
+  const QS = location.search;
+  const BENCH = /[?&]bench\b/.test(QS); // for timing: skip saved data and show how long each load took
+  const LEGACY = /[?&]legacy\b/.test(QS); // for timing: load the list the way the previous version did
   const COLORS = () => {
     const cs = getComputedStyle(document.documentElement);
     return {
@@ -90,25 +108,50 @@
     } finally { clearTimeout(timer); }
   }
 
-  // Query Florida's trail inventory, page by page; tries the state's second server if the first fails.
-  async function trailQuery(params, onPage) {
-    const base = Object.assign({ outFields: FIELDS, returnGeometry: 'true', outSR: '4326', geometryPrecision: '6', f: 'json', orderByFields: 'OBJECTID' }, params);
+  const post = (url, params, ms) => getJson(url, ms || 45000, { method: 'POST', body: new URLSearchParams(params).toString(), headers: { 'Content-Type': 'application/x-www-form-urlencoded' } })
+    .then((j) => { if (j.error) throw new Error(j.error.message || 'service error'); return j; });
+
+  // One map service query, every page. Counts first, then asks for all pages at once instead of one after another.
+  async function arcQuery(url, params, onPage, sequential) {
+    const base = Object.assign({ returnGeometry: 'true', outSR: '4326', geometryPrecision: '6', f: 'json', orderByFields: 'OBJECTID' }, params);
+    if (sequential) {
+      const feats = [];
+      for (let offset = 0; offset < 20000; offset += 1000) {
+        const j = await post(url, Object.assign({}, base, { resultOffset: String(offset), resultRecordCount: '1000' }));
+        feats.push(...(j.features || [])); if (onPage) onPage(feats.length);
+        if (!j.exceededTransferLimit) break;
+      }
+      return feats;
+    }
+    const countParams = Object.assign({}, base, { returnCountOnly: 'true', returnGeometry: 'false' }); delete countParams.orderByFields;
+    const n = +(await post(url, countParams, 20000)).count || 0;
+    const pages = [];
+    let done = 0;
+    for (let offset = 0; offset < Math.max(n, 1); offset += 1000) {
+      pages.push(post(url, Object.assign({}, base, { resultOffset: String(offset), resultRecordCount: '1000' })).then((j) => { done += (j.features || []).length; if (onPage) onPage(done); return j.features || []; }));
+    }
+    return (await Promise.all(pages)).flat();
+  }
+
+  // Query Florida's trail inventory; tries the state's second server if the first fails.
+  async function trailQuery(params, onPage, sequential) {
     let lastErr;
     for (const url of TRAILS_URLS) {
-      try {
-        const feats = [];
-        for (let offset = 0; offset < 20000; offset += 1000) {
-          const body = new URLSearchParams(Object.assign({}, base, { resultOffset: String(offset), resultRecordCount: '1000' })).toString();
-          const j = await getJson(url, 45000, { method: 'POST', body, headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
-          if (j.error) throw new Error(j.error.message || 'service error');
-          feats.push(...(j.features || []));
-          if (onPage) onPage(feats.length);
-          if (!j.exceededTransferLimit) break;
-        }
-        return feats;
-      } catch (e) { lastErr = e; }
+      try { return await arcQuery(url, Object.assign({ outFields: FIELDS }, params), onPage, sequential); } catch (e) { lastErr = e; }
     }
     throw lastErr || new Error('trail service out of reach');
+  }
+
+  async function overpass(query, timeoutMs) {
+    let lastErr;
+    for (const ep of OVERPASS) {
+      try {
+        const j = await getJson(ep, timeoutMs || 60000, { method: 'POST', body: 'data=' + encodeURIComponent(query), headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+        if (j.remark && /error|timed out|out of memory/i.test(j.remark) && !(j.elements || []).length) { lastErr = new Error(j.remark); continue; }
+        return j;
+      } catch (e) { lastErr = e; }
+    }
+    throw lastErr || new Error('OpenStreetMap out of reach');
   }
 
   async function geocode(q) {
@@ -173,8 +216,8 @@
   function surfClass(s) {
     s = clean(s).toLowerCase();
     if (/boardwalk|wood/.test(s)) return 'board';
-    if (/unpaved|soft|natural|dirt|sand|grass|shell|gravel|lime/.test(s)) return 'nat';
-    if (/paved|hard|asphalt|concrete/.test(s)) return 'paved';
+    if (/unpaved|soft|natural|dirt|sand|grass|shell|gravel|lime|ground|earth|mud|compacted|rock|woodchips|pebble/.test(s)) return 'nat';
+    if (/paved|hard|asphalt|concrete|sett|brick/.test(s)) return 'paved';
     return 'unk';
   }
   const SURF_WORD = { board: 'boardwalk', paved: 'paved', nat: 'natural ground', unk: 'surface not listed' };
@@ -184,10 +227,27 @@
     if (st.total > 8000 && st.nat / tot > 0.5) return 'Moderate';
     return 'Easy to moderate';
   }
-  function agencyKind(a) { return /county/i.test(a || '') ? 'county' : 'state'; }
+  function agencyKind(a) {
+    a = clean(a);
+    if (/county/i.test(a)) return 'county';
+    if (/^(U\.\s?S\.|US )|National Park|Army Corps/i.test(a)) return 'federal';
+    if (/^FDEP|^Florida |Water Management/i.test(a)) return 'state';
+    if (/^(City|Town|Village) of/i.test(a)) return 'city';
+    return 'other';
+  }
+  const KIND_WORD = { state: 'State', county: 'County', city: 'City or town', federal: 'Federal', other: 'Other', osm: 'OpenStreetMap' };
+  const SF_SET = new Set(SF_COUNTIES);
+  // The South Florida county a trail lies in, from the state's county list ("Palm Beach, Martin", "Dade").
+  function sfCounty(raw) {
+    const parts = clean(raw).split(',').map((s) => s.trim()).map((s) => (s === 'Dade' ? 'Miami-Dade' : /^Saint Lucie$/i.test(s) ? 'St. Lucie' : s));
+    return parts.find((p) => SF_SET.has(p)) || '';
+  }
+  const titleCase = (s) => clean(s).toLowerCase().split(' ').map((w) => (/^[^aeiouy]+$/i.test(w.replace(/[^a-z]/gi, '')) && w.replace(/[^a-z]/gi, '').length > 1 ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1))).join(' ');
   function agencyLabel(a) {
     a = clean(a);
+    if (!a) return 'Agency not listed';
     if (/^FDEP/i.test(a)) return 'Florida State Parks';
+    if (agencyKind(a) === 'federal') return a + ' (federal)';
     if (/Fish and Wildlife/i.test(a)) return 'Florida Fish and Wildlife (state)';
     if (/Forest Service/i.test(a)) return 'Florida Forest Service (state)';
     if (/Water Management/i.test(a)) return a + ' (state)';
@@ -210,12 +270,12 @@
     const a = f.attributes || {}, g = f.geometry || {};
     return {
       id: a.OBJECTID, name: clean(a.SEGMENT_NAME) || clean(a.TRAIL_NAME), surf: clean(a.SURFACE), use: clean(a.TYPE),
-      agency: clean(a.MANAGING_AGENCY), site: clean(a.MANAGING_SITE), county: clean(a.COUNTY), mi: +a.GIS_MILES || 0,
-      upd: a.LAST_UPDATE || 0, url: clean(a.URL), paths: (g.paths || []).map((p) => p.map((c) => [+(+c[1]).toFixed(6), +(+c[0]).toFixed(6)])),
+      agency: clean(a.MANAGING_AGENCY), site: clean(a.MANAGING_SITE), county: sfCounty(a.COUNTY) || clean(a.COUNTY), rawCounty: clean(a.COUNTY), mi: +a.GIS_MILES || 0,
+      upd: a.LAST_UPDATE || 0, url: clean(a.URL), src: 'fdep', paths: (g.paths || []).map((p) => p.map((c) => [+(+c[1]).toFixed(6), +(+c[0]).toFixed(6)])),
     };
   }
-  const siteKey = (f) => f.site || (f.agency + ' · ' + f.county);
-  const siteName = (f) => f.site || agencyLabel(f.agency) + ' trails, ' + f.county + ' County';
+  const siteKey = (f) => f.key || f.site || (f.agency + ' · ' + (f.rawCounty || f.county));
+  const siteName = (f) => f.site || (f.agency ? agencyLabel(f.agency) + ' trails, ' : 'Trails, ') + f.county + ' County';
 
   // Group trail pieces into parks, and each park's pieces into named trails.
   function buildParks(feats) {
@@ -223,7 +283,7 @@
     for (const f of feats) {
       const k = siteKey(f);
       let p = parks.get(k);
-      if (!p) { p = { key: k, name: siteName(f), agency: f.agency, kind: agencyKind(f.agency), county: f.county, mi: 0, easyMi: 0, la: 0, lo: 0, n: 0, trails: new Map(), bb: [90, 180, -90, -180] }; parks.set(k, p); }
+      if (!p) { p = { key: k, name: siteName(f), agency: f.agency, kind: f.src === 'osm' ? 'osm' : agencyKind(f.agency), county: f.county, src: f.src || 'fdep', mi: 0, easyMi: 0, la: 0, lo: 0, n: 0, trails: new Map(), bb: [90, 180, -90, -180] }; parks.set(k, p); }
       const sc = surfClass(f.surf);
       p.mi += f.mi; if (sc === 'board' || sc === 'paved') p.easyMi += f.mi;
       const tk = f.name || '__unnamed';
@@ -253,32 +313,198 @@
   const findStatus = (msg, err) => { const s = $('#findStatus'); s.textContent = msg || ''; s.classList.toggle('err', !!err); };
   const errWord = (e) => (e && e.name === 'AbortError' ? 'it timed out' : (e && e.message) || 'no answer');
 
-  function agencySql() {
-    const who = ($('#whoFilter') || {}).value || 'both';
-    return who === 'state' ? STATE_SQL : who === 'county' ? COUNTY_SQL : `(${STATE_SQL} OR ${COUNTY_SQL})`;
+  const whoVal = () => ($('#whoFilter') || {}).value || 'all';
+  function agencySql(who) {
+    who = who || whoVal();
+    return { state: STATE_SQL, county: COUNTY_SQL, city: CITY_SQL, federal: FED_SQL }[who] || '1=1';
+  }
+  const secs = (t0) => ((performance.now() - t0) / 1000).toFixed(1) + ' s';
+
+  /* ---- Palm Beach County natural areas (county's own trail map, with trail markers) ---- */
+  const PBC_ELEM = { HIKING: 'Hiking trail', NATURE: 'Nature trail', BOARDWALK: 'Boardwalk', 'MULTI-USE': 'Multi-use trail', EQUESTRIAN: 'Equestrian trail' };
+  const PBC_USE = { HIKING: 'Hiking', NATURE: 'Hiking', BOARDWALK: 'Hiking', 'MULTI-USE': 'Multi-use', EQUESTRIAN: 'Equestrian' };
+  function pbcSlim(f, areaName) {
+    const a = f.attributes || {}, g = f.geometry || {};
+    const el0 = clean(a.ELEMENT).toUpperCase(), code = clean(a.FCODE), num = parseInt(code.slice(-3), 10);
+    const note = clean(a.NOTE), marked = note && !/^UN(MARKED|MAKRED)\b/i.test(note);
+    const name = (PBC_ELEM[el0] || titleCase(el0) + ' trail') + (num ? ' ' + num : '') + (marked ? ` (${note.toLowerCase()})` : '');
+    return {
+      id: 'pbc' + a.OBJECTID, name, surf: el0 === 'BOARDWALK' ? 'Boardwalk' : /SIDEWALK|PAVED|ASPHALT/i.test(note) ? 'Paved' : '', use: PBC_USE[el0] || '',
+      agency: PBC_AGENCY, site: areaName, key: 'pbc:' + code.slice(0, 3), county: 'Palm Beach', mi: (+a.LENGTH || 0) / 5280, upd: 0, url: '', src: 'pbc',
+      paths: (g.paths || []).map((p) => p.map((c) => [+(+c[1]).toFixed(6), +(+c[0]).toFixed(6)])),
+    };
+  }
+  function inRing(lat, lon, ring) { // ring of [lon, lat]
+    let inside = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const xi = ring[i][0], yi = ring[i][1], xj = ring[j][0], yj = ring[j][1];
+      if ((yi > lat) !== (yj > lat) && lon < ((xj - xi) * (lat - yi)) / (yj - yi) + xi) inside = !inside;
+    }
+    return inside;
+  }
+  // Each trail's code starts with its natural area's code; work out which area each code belongs to
+  // from where its trails lie inside the county's natural area outlines.
+  async function pbcIndex() {
+    const ck = `pbc:${DATA_V}:index`;
+    if (!BENCH) { const hit = await cacheGet(ck, 14 * DAY); if (hit) return hit.data; }
+    const [areas, trails] = await Promise.all([
+      arcQuery(PBC_BASE + '15/query', { where: '1=1', outFields: 'OBJECTID,FNAME', maxAllowableOffset: '0.0003', geometryPrecision: '5' }),
+      arcQuery(PBC_BASE + '17/query', { where: PBC_TRAIL_SQL, outFields: 'OBJECTID,ELEMENT,FCODE,LENGTH,NOTE,END_DATE', maxAllowableOffset: '0.002', geometryPrecision: '4' }),
+    ]);
+    const now = Date.now();
+    const votes = new Map();
+    const live = trails.filter((f) => !(f.attributes.END_DATE && f.attributes.END_DATE < now));
+    for (const f of live) {
+      const code = clean(f.attributes.FCODE).slice(0, 3), path = ((f.geometry || {}).paths || [])[0];
+      if (!code || !path || !path.length) continue;
+      const c = path[path.length >> 1];
+      const area = areas.find((a) => ((a.geometry || {}).rings || []).some((r) => inRing(c[1], c[0], r)));
+      if (!area) continue;
+      const v = votes.get(code) || new Map(); const nm = clean(area.attributes.FNAME);
+      v.set(nm, (v.get(nm) || 0) + 1); votes.set(code, v);
+    }
+    const codeName = new Map();
+    for (const [code, v] of votes) {
+      const nm = [...v.entries()].sort((x, y) => y[1] - x[1])[0][0];
+      const t = titleCase(nm);
+      codeName.set(code, /connector/i.test(t) ? t : t + ' Natural Area');
+    }
+    const feats = live.map((f) => { const code = clean(f.attributes.FCODE).slice(0, 3); return pbcSlim(f, codeName.get(code) || 'Palm Beach County natural area (' + code + ')'); });
+    const parks = buildParks(feats);
+    await cachePut(ck, parks);
+    return parks;
+  }
+
+  /* ---- OpenStreetMap nature areas near a place: fills in preserves and wetlands no agency map covers ---- */
+  function osmQuery(lat, lon, r) {
+    const ar = `(around:${r},${lat.toFixed(5)},${lon.toFixed(5)})`;
+    const nat = 'nature|wetland|preserve|marsh|hammock|slough|scrub|swamp|environmental|conservation|wildlife|sanctuary|glades|cypress|mangrove|refuge|wilderness';
+    return `[out:json][timeout:90];
+(
+ way[leisure=nature_reserve][name]${ar}; relation[leisure=nature_reserve][name]${ar};
+ way[boundary=protected_area][name]${ar}; relation[boundary=protected_area][name]${ar};
+ way[leisure=park][name~"${nat}",i]${ar}; relation[leisure=park][name~"${nat}",i]${ar};
+)->.c;
+foreach.c->.p(
+ .p out tags center bb;
+ .p map_to_area->.a;
+ way(area.a)[highway~"${TRAIL_HW}"]${NOT_SIDEWALK}->.w;
+ way.w[~"^(surface|bridge)$"~"^(asphalt|concrete|paved|paving_stones|wood|boardwalk|metal)$"];
+ make estat m=sum(length());
+ out;
+ way.w[name];
+ for (t["name"])(
+  make trail name=_.val,m=sum(length()),s=set(t["surface"]),b=set(t["bridge"]);
+  out;
+ );
+ (.w;);
+ make tstat n=count(ways),m=sum(length());
+ out;
+);`;
+  }
+  function osmParks(json) {
+    const out = []; let cur = null, easy = 0, trails = [];
+    for (const e of json.elements || []) {
+      const t = e.tags || {};
+      if (e.type === 'estat') { easy = +t.m || 0; continue; }
+      if (e.type === 'trail') { if (t.name) trails.push({ name: t.name, m: +t.m || 0, s: String(t.s || ''), b: String(t.b || '') }); continue; }
+      if (e.type === 'tstat') {
+        if (cur && +t.n > 0 && +t.m >= 150) {
+          const mi = (+t.m) / 1609.344;
+          const tl = trails.length ? trails.map((x) => ({ name: x.name, mi: x.m / 1609.344, lat: cur.lat, lon: cur.lon, cls: /boardwalk/.test(x.b) || /^(asphalt|concrete|paved|wood|boardwalk)/.test(x.s) ? 'easy' : x.s ? 'nat' : 'unk', use: '' }))
+            : [{ name: '__unnamed', mi, lat: cur.lat, lon: cur.lon, cls: 'unk', use: '' }];
+          out.push(Object.assign(cur, { mi, easyMi: easy / 1609.344, trailList: tl }));
+        }
+        cur = null; easy = 0; trails = []; continue;
+      }
+      const c = e.center; trails = []; easy = 0;
+      if (!c || !t.name) { cur = null; continue; }
+      cur = {
+        key: 'osm:' + e.type[0] + e.id, name: t.name, agency: t.operator || '', kind: 'osm', src: 'osm', county: '', lat: c.lat, lon: c.lon,
+        bb: e.bounds ? [e.bounds.minlat, e.bounds.minlon, e.bounds.maxlat, e.bounds.maxlon] : [c.lat, c.lon, c.lat, c.lon],
+      };
+    }
+    return out;
+  }
+  const stripWords = (n) => normName(n).replace(/(stateparks?|statepark|naturalarea|naturepreserve|preserve|park|nationalwildliferefuge|wildlifemanagementarea|naturecenter|the)/g, '');
+  // Leave out an OpenStreetMap area when an agency map already covers the same place.
+  function newOsm(osm, official) {
+    return osm.filter((o) => {
+      const on = stripWords(o.name);
+      if (official.some((p) => { const pn = stripWords(p.name); return pn && on && (pn === on || (pn.length > 5 && on.includes(pn)) || (on.length > 5 && pn.includes(on))); })) return false;
+      const span = hav(o.bb[0], o.bb[1], o.bb[2], o.bb[3]);
+      if (span < 6000 && official.some((p) => p.lat >= o.bb[0] && p.lat <= o.bb[2] && p.lon >= o.bb[1] && p.lon <= o.bb[3])) return false;
+      return true;
+    });
+  }
+  async function osmNearby(lat, lon, r) {
+    const ck = `osm:${DATA_V}:${lat.toFixed(2)},${lon.toFixed(2)},${r}`;
+    if (!BENCH) { const hit = await cacheGet(ck, 14 * DAY); if (hit) return hit.data; }
+    const parks = osmParks(await overpass(osmQuery(lat, lon, r), 100000));
+    await cachePut(ck, parks);
+    return parks;
+  }
+
+  // Florida's inventory plus Palm Beach County's natural areas, filtered to the search circle.
+  function nearCircle(p, lat, lon, r) {
+    if (hav(lat, lon, p.lat, p.lon) <= r) return true;
+    return p.trailList.some((t) => hav(lat, lon, t.lat, t.lon) <= r);
+  }
+  function mergeOfficial(state, pbc) {
+    // The state's list repeats some county natural areas; the county's own map has the trail markers, so keep that one.
+    const pn = pbc.map((p) => stripWords(p.name)).filter(Boolean);
+    return state.filter((p) => !(/Palm Beach/.test(p.county) && /County/i.test(p.agency) && pn.some((n) => { const s = stripWords(p.name); return s && (s === n || s.includes(n) || n.includes(s)); }))).concat(pbc);
   }
 
   async function discover(lat, lon, label) {
-    const all = S.radius === 0;
+    const all = S.radius === 0, who = whoVal(), t0 = performance.now();
     if (!all) { S.center = { lat, lon, label }; store.set('center', S.center); }
-    const where = `${agencySql()} AND ${FOOT_SQL} AND COUNTY IN (${SF_COUNTIES.map((c) => `'${sql(c)}'`).join(',')})`;
-    const key = `disc:${DATA_V}:${all ? 'all' : lat.toFixed(2) + ',' + lon.toFixed(2) + ',' + S.radius}:${($('#whoFilter') || {}).value || 'both'}`;
+    const key = `disc:${DATA_V}${LEGACY ? 'L' : ''}:${all ? 'all' : lat.toFixed(2) + ',' + lon.toFixed(2) + ',' + S.radius}:${who}`;
     const where2 = all ? 'all of South Florida' : `${fmtMi(S.radius)} of ${label}`;
+    const token = (S.discToken = (S.discToken || 0) + 1);
     $('#areaList').replaceChildren();
-    const hit = await cacheGet(key, 7 * DAY);
-    if (hit) { S.parks = hit.data; renderList(); findStatus(listSummary(where2) + ` Saved list from ${new Date(hit.time).toLocaleDateString()}.`); return; }
-    findStatus(`Loading state and county trails within ${where2}...`);
+    const hit = BENCH ? null : await cacheGet(key, 30 * DAY);
+    if (hit) {
+      S.parks = hit.data; renderList(); findStatus(listSummary(where2) + ` Saved list from ${new Date(hit.time).toLocaleDateString()}.`);
+      if (!all && who === 'all') addOsm(lat, lon, where2, token);
+      if (Date.now() - hit.time < DAY) return;
+    } else findStatus(`Loading trails within ${where2}...`);
     try {
-      const params = { where, maxAllowableOffset: '0.0005' };
+      const params = LEGACY
+        ? { where: `(${STATE_SQL} OR ${COUNTY_SQL}) AND ${FOOT_SQL} AND COUNTY IN (${SF_COUNTIES.map((c) => `'${sql(c)}'`).join(',')})`, maxAllowableOffset: '0.0005' }
+        : { where: `${agencySql(who)} AND ${FOOT_SQL} AND ${COUNTY_ANY}`, outFields: LIST_FIELDS, maxAllowableOffset: '0.005', geometryPrecision: '4' };
       if (!all) Object.assign(params, { geometry: `${lon.toFixed(5)},${lat.toFixed(5)}`, geometryType: 'esriGeometryPoint', inSR: '4326', distance: String(S.radius), units: 'esriSRUnit_Meter', spatialRel: 'esriSpatialRelIntersects' });
-      const feats = await trailQuery(params, (n) => findStatus(`Loading state and county trails within ${where2}... ${n} trail pieces so far.`));
-      S.parks = buildParks(feats.map(slim));
+      const progress = (n) => { if (!hit && token === S.discToken) findStatus(`Loading trails within ${where2}... ${n} trail pieces so far.`); };
+      const wantPbc = !LEGACY && (who === 'all' || who === 'county') && (all || hav(lat, lon, 26.65, -80.45) < S.radius + 60000);
+      const [feats, pbcAll] = await Promise.all([
+        trailQuery(params, progress, LEGACY),
+        wantPbc ? pbcIndex().catch(() => []) : Promise.resolve([]),
+      ]);
+      if (token !== S.discToken) return;
+      const state = buildParks(feats.map(slim).filter((f) => LEGACY || sfCounty(f.rawCounty)));
+      const pbc = all ? pbcAll : pbcAll.filter((p) => nearCircle(p, lat, lon, S.radius));
+      S.parks = mergeOfficial(state, pbc);
       await cachePut(key, S.parks);
       renderList();
-      findStatus(S.parks.length ? listSummary(where2) : `No state or county trails found within ${where2}. Try a bigger radius.`);
+      findStatus((S.parks.length ? listSummary(where2) : `No trails found within ${where2}. Try a bigger radius.`) + (BENCH ? ` Loaded in ${secs(t0)}.` : ''));
+      if (!all && who === 'all') addOsm(lat, lon, where2, token);
     } catch (e) {
-      findStatus(`Florida's trail service didn't answer (${errWord(e)}). Check your signal and try again.`, true);
+      if (!hit) findStatus(`The trail map services didn't answer (${errWord(e)}). Check your signal and try again.`, true);
     }
+  }
+
+  // Adds OpenStreetMap nature areas after the official list is showing, so it never holds the list up.
+  async function addOsm(lat, lon, where2, token) {
+    if (LEGACY || S.radius > 48280) return;
+    try {
+      const osm = await osmNearby(lat, lon, S.radius);
+      if (token !== S.discToken) return;
+      const extra = newOsm(osm, S.parks.filter((p) => p.src !== 'osm'));
+      if (!extra.length) return;
+      S.parks = S.parks.filter((p) => p.src !== 'osm').concat(extra);
+      renderList();
+      findStatus(listSummary(where2) + ` Includes ${extra.length} nature area${extra.length === 1 ? '' : 's'} mapped on OpenStreetMap.`);
+    } catch (e) { /* the official list stands on its own */ }
   }
 
   function trailRows() {
@@ -286,14 +512,14 @@
     for (const p of S.parks) for (const t of p.trailList) rows.push({ park: p, name: t.name, mi: t.mi, lat: t.lat, lon: t.lon, cls: t.cls, use: t.use });
     return rows;
   }
-  const listSummary = (where2) => `${trailRows().length} trails in ${S.parks.length} state and county parks within ${where2}.`;
+  const listSummary = (where2) => `${trailRows().length} trails in ${S.parks.length} parks and preserves within ${where2}.`;
 
   function surfTag(cls) {
     if (cls === 'easy') return el('span', { class: 'tag' }, [el('i', { style: 'background:var(--board)' }), 'Boardwalk or paved']);
     if (cls === 'nat') return el('span', { class: 'tag' }, [el('i', { style: 'background:var(--nat)' }), 'Natural ground']);
     return el('span', { class: 'tag' }, [el('i', { style: 'background:var(--unk)' }), 'Surface not listed']);
   }
-  const kindTag = (p) => el('span', { class: 'tag', text: p.kind === 'county' ? 'County' : 'State' });
+  const kindTag = (p) => el('span', { class: 'tag', text: KIND_WORD[p.kind] || 'Other' });
   const favTag = (k) => (S.favs[k] ? el('span', { class: 'tag' }, [el('span', { class: 'fav', text: '★' }), 'Favorite']) : null);
 
   function parkCard(p) {
@@ -364,7 +590,7 @@
     $('#savedBlock').hidden = !saved.length;
     $('#savedList').replaceChildren(...saved.map((s) => el('li', null, [el('button', { class: 'area', type: 'button', onclick: () => openPark(s.key) }, [
       el('h3', { text: s.name }),
-      el('div', { class: 'meta' }, [el('span', { class: 'tag', text: s.kind === 'county' ? 'County' : 'State' }), el('span', { class: 'tag', text: fmtMi(s.m) + ' of trails' })]),
+      el('div', { class: 'meta' }, [el('span', { class: 'tag', text: KIND_WORD[s.kind] || 'Other' }), el('span', { class: 'tag', text: fmtMi(s.m) + ' of trails' })]),
     ])])));
   }
 
@@ -399,21 +625,34 @@
     if (!q) return;
     box.hidden = false; box.replaceChildren(el('p', { class: 'status', text: 'Searching...' }));
     const s = sql(q.slice(0, 60)).toUpperCase();
-    const [parksR, placesR] = await Promise.allSettled([
-      trailQuery({ where: `${agencySql()} AND ${FOOT_SQL} AND (UPPER(MANAGING_SITE) LIKE '%${s}%' OR UPPER(SEGMENT_NAME) LIKE '%${s}%')`, returnGeometry: 'false', outFields: 'OBJECTID,MANAGING_SITE,MANAGING_AGENCY,COUNTY,SEGMENT_NAME' }),
+    const who = whoVal(), nq = normName(q);
+    const [parksR, placesR, pbcR] = await Promise.allSettled([
+      trailQuery({ where: `${agencySql(who)} AND ${FOOT_SQL} AND ${COUNTY_ANY} AND (UPPER(MANAGING_SITE) LIKE '%${s}%' OR UPPER(SEGMENT_NAME) LIKE '%${s}%')`, returnGeometry: 'false', outFields: 'OBJECTID,MANAGING_SITE,MANAGING_AGENCY,COUNTY,SEGMENT_NAME' }),
       geocode(q),
+      who === 'all' || who === 'county' ? pbcIndex() : Promise.resolve([]),
     ]);
     const kids = [];
+    if (pbcR.status === 'fulfilled') {
+      for (const p of pbcR.value) {
+        const t = p.trailList.find((x) => normName(x.name).includes(nq));
+        if (!normName(p.name).includes(nq) && !t) continue;
+        kids.push(el('button', { type: 'button', onclick: () => { box.hidden = true; S.parks = S.parks.filter((x) => x.key !== p.key).concat([p]); openPark(p.key, t ? t.name : undefined); } }, [
+          el('span', { text: t ? `${t.name}, ${p.name}` : p.name }), el('small', { text: 'Palm Beach County natural area · open trail map' }),
+        ]));
+      }
+    }
     if (parksR.status === 'fulfilled') {
-      const seen = new Map(), nq = normName(q);
+      const seen = new Map();
       for (const f of parksR.value) {
-        const a = slim(f); if (!SF_COUNTIES.includes(a.county)) continue;
+        const a = slim(f); if (!sfCounty(a.rawCounty)) continue;
         const k = siteKey(a), hitName = a.name && normName(a.name).includes(nq) ? a.name : null;
         const prev = seen.get(k);
         if (!prev) seen.set(k, { k, name: siteName(a), county: a.county, agency: a.agency, trail: hitName });
         else if (!prev.trail && hitName) prev.trail = hitName;
       }
-      for (const r of [...seen.values()].slice(0, 8)) {
+      const pbcNames = pbcR.status === 'fulfilled' ? pbcR.value.map((p) => stripWords(p.name)) : [];
+      const dupPbc = (r) => /County/i.test(r.agency) && /Palm Beach/.test(r.county) && pbcNames.includes(stripWords(r.name));
+      for (const r of [...seen.values()].filter((x) => !dupPbc(x)).slice(0, 8)) {
         kids.push(el('button', { type: 'button', onclick: () => { box.hidden = true; openPark(r.k, r.trail || undefined); } }, [
           el('span', { text: r.trail ? `${r.trail}, ${r.name}` : r.name }), el('small', { text: `${agencyKind(r.agency) === 'county' ? r.agency : agencyLabel(r.agency) + ' · ' + r.county + ' County'} · open trail map` }),
         ]));
@@ -422,8 +661,16 @@
     if (placesR.status === 'fulfilled') {
       for (const r of placesR.value.slice(0, 5)) {
         const lat = +r.lat, lon = +r.lon, name = r.name || r.display_name.split(',')[0];
+        const where = r.display_name.split(',').slice(1, 3).join(',').trim();
+        // A nature reserve or park found by name opens straight onto its OpenStreetMap trail lines.
+        if ((r.osm_type === 'way' || r.osm_type === 'relation') && /^(leisure|boundary)$/.test(r.category || '') && /^(nature_reserve|park|protected_area|national_park)$/.test(r.type || '')) {
+          const key = 'osm:' + r.osm_type[0] + r.osm_id;
+          kids.push(el('button', { type: 'button', onclick: () => { box.hidden = true; S.osmNames = Object.assign(S.osmNames || {}, { [key]: name }); openPark(key); } }, [
+            el('span', { text: name }), el('small', { text: 'Trail map from OpenStreetMap · ' + where }),
+          ]));
+        }
         kids.push(el('button', { type: 'button', onclick: () => { box.hidden = true; if (S.radius === 0) setRadius(24140); discover(lat, lon, name); } }, [
-          el('span', { text: name }), el('small', { text: 'Find state and county trails near here · ' + r.display_name.split(',').slice(1, 3).join(',').trim() }),
+          el('span', { text: name }), el('small', { text: 'Find trails near here · ' + where }),
         ]));
       }
     }
@@ -435,17 +682,53 @@
   /* ================= PARK VIEW ================= */
   const areaStatus = (msg, err) => { const s = $('#areaStatus'); s.textContent = msg || ''; s.classList.toggle('err', !!err); };
 
+  // A park's full trail lines, fetched only when the park is opened. Points that sit within about
+  // half a metre of a straight line between their neighbours are dropped; nothing else changes.
+  const PARK_OFFSET = '0.000005';
   async function loadPark(key, force) {
     const ck = `park:${DATA_V}:${key}`;
-    if (!force) { const hit = await cacheGet(ck, 0); if (hit && hit.data.length) return { feats: hit.data, time: hit.time }; }
-    let where;
-    if (key.includes(' · ')) {
-      const [ag, co] = key.split(' · ');
-      where = `(MANAGING_SITE IS NULL OR MANAGING_SITE = ' ' OR MANAGING_SITE = '') AND MANAGING_AGENCY = '${sql(ag)}' AND COUNTY = '${sql(co)}'`;
-    } else where = `MANAGING_SITE = '${sql(key)}'`;
-    const feats = (await trailQuery({ where: `${where} AND ${FOOT_SQL}` })).map(slim).filter((f) => f.paths.length);
+    if (!force && !BENCH) { const hit = await cacheGet(ck, 0); if (hit && hit.data.length) return { feats: hit.data, time: hit.time }; }
+    let feats;
+    if (key.startsWith('pbc:')) {
+      const code = key.slice(4).replace(/[^A-Za-z0-9]/g, '');
+      const raw = await arcQuery(PBC_BASE + '17/query', { where: `${PBC_TRAIL_SQL} AND FCODE LIKE '${code}%'`, outFields: 'OBJECTID,ELEMENT,FCODE,LENGTH,NOTE,END_DATE', maxAllowableOffset: PARK_OFFSET });
+      const idx = await pbcIndex().catch(() => []);
+      const name = (idx.find((p) => p.key === key) || {}).name || 'Palm Beach County natural area';
+      feats = raw.filter((f) => !(f.attributes.END_DATE && f.attributes.END_DATE < Date.now())).map((f) => pbcSlim(f, name));
+    } else if (key.startsWith('osm:')) {
+      feats = await loadOsmPark(key);
+    } else {
+      let where;
+      if (key.includes(' · ')) {
+        const [ag, co] = key.split(' · ');
+        where = `${BLANK('MANAGING_SITE')} AND ${ag ? `${TRIM('MANAGING_AGENCY')} = '${sql(ag)}'` : BLANK('MANAGING_AGENCY')} AND ${TRIM('COUNTY')} = '${sql(co)}'`;
+      } else where = `${TRIM('MANAGING_SITE')} = '${sql(key)}'`;
+      const params = { where: `${where} AND ${FOOT_SQL}` };
+      if (!LEGACY) params.maxAllowableOffset = PARK_OFFSET;
+      feats = (await trailQuery(params)).map(slim);
+    }
+    feats = feats.filter((f) => f.paths.length);
     if (feats.length) await cachePut(ck, feats);
     return { feats, time: Date.now() };
+  }
+
+  // Trail lines inside one OpenStreetMap park or preserve, in the same shape as the official lines.
+  async function loadOsmPark(key) {
+    const t = key[4] === 'r' ? 'relation' : 'way', id = key.slice(5).replace(/\D/g, '');
+    const j = await overpass(`[out:json][timeout:60];${t}(${id})->.p;.p out tags;.p map_to_area->.a;(way(area.a)[highway~"${TRAIL_HW}"]${NOT_SIDEWALK};way(area.a)[man_made=pier];);out tags geom;`, 70000);
+    const els = j.elements || [];
+    const area = els.find((e) => e.type === t && String(e.id) === id) || {};
+    const at = area.tags || {};
+    const name = at.name || (S.osmNames || {})[key] || 'Nature area';
+    return els.filter((e) => e.type === 'way' && e.geometry && !(e.type === t && String(e.id) === id)).map((e) => {
+      const g = e.tags || {};
+      const surf = g.bridge === 'boardwalk' || g.man_made === 'pier' ? 'Boardwalk' : (g.surface || '').replace(/_/g, ' ');
+      return {
+        id: 'osm' + e.id, name: g.name || g.ref || '', surf, use: g.highway === 'cycleway' ? 'Biking' : g.highway === 'bridleway' ? 'Equestrian' : '',
+        agency: at.operator || '', site: name, key, county: '', mi: 0, upd: 0, url: /^https:\/\//.test(at.website || '') ? at.website : '', src: 'osm',
+        paths: [e.geometry.filter((p) => p && p.lat != null).map((p) => [p.lat, p.lon])],
+      };
+    });
   }
 
   // Graph from the official lines. Points within about 1 m are one point. A trail end within
@@ -511,7 +794,7 @@
     const f0 = feats[0];
     return {
       key, ways, coords, adj, segs, segWay, proj, stats, groups: groupList,
-      info: { name: siteName(f0), agency: f0.agency, kind: agencyKind(f0.agency), county: f0.county, url: (feats.find((f) => /^https:\/\//.test(f.url)) || {}).url || '' },
+      info: { name: siteName(f0), agency: f0.agency, kind: f0.src === 'osm' ? 'osm' : agencyKind(f0.agency), county: f0.county, src: f0.src || 'fdep', url: (feats.find((f) => /^https:\/\//.test(f.url)) || {}).url || '' },
       bounds: L.latLngBounds(ways.flatMap((w) => w.ll)),
     };
   }
@@ -544,7 +827,7 @@
     const map = L.map('map', { zoomControl: false, preferCanvas: true, attributionControl: true, tap: true });
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19, crossOrigin: true,
-      attribution: '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> · Trails: Florida DEP',
+      attribution: '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> · Trails: Florida DEP, Palm Beach County, OpenStreetMap',
     }).addTo(map);
     L.control.zoom({ position: 'bottomleft' }).addTo(map);
     map.on('dragstart', () => setFollow(false));
@@ -646,13 +929,15 @@
       .filter(([k]) => st[k] / tot >= 0.05).map(([k, w]) => `${pct(st[k])}% ${w}`).join(', ');
   }
 
+  const runBy = (info) => (info.src === 'osm' ? (info.agency || 'Not listed on OpenStreetMap') : agencyLabel(info.agency));
+
   function renderTrailDetail(m, grp) {
     const box = $('#trailDetail');
     if (!grp) { box.hidden = true; $('#areaFactsHead').textContent = 'About this park'; return; }
     box.hidden = false;
     $('#areaFactsHead').textContent = 'About the park';
     $('#tdName').textContent = grp.name;
-    $('#tdPark').textContent = `${m.info.name} · ${agencyLabel(m.info.agency)}`;
+    $('#tdPark').textContent = `${m.info.name} · ${runBy(m.info)}`;
     const sh = SHAPE[grp.shape];
     const lenLabel = grp.shape === 'line' ? `One way · about ${fmtMi(grp.len * 2)} there and back` : grp.shape === 'loop' ? 'Around the loop' : 'All pieces with this name';
     const facts = [
@@ -667,12 +952,19 @@
     if (S.extras) { const wc = nearestPoi(m, grp, ['toilets']); facts.push(el('div', { class: 'fact wide' }, [el('b', { text: wc && wc.d < 400 ? `${fmtMi(wc.d)} from the trail` : 'None mapped near this trail' }), el('span', { text: 'Restrooms (OpenStreetMap)' })])); }
     $('#tdFacts').replaceChildren(...facts);
 
-    const notes = [];
-    if (grp.pieces > 1) notes.push(`The state's map draws this trail in ${grp.pieces} pieces that don't join up. Follow the park's signs where there's a gap.`);
+    const notes = [], src = m.info.src, who = src === 'pbc' ? "The county's" : src === 'osm' ? 'OpenStreetMap' : "The state's";
+    if (grp.pieces > 1) notes.push(`${who} map draws this trail in ${grp.pieces} pieces that don't join up. Follow the park's signs where there's a gap.`);
     if (grp.cls.unk / (grp.cls.total || 1) >= 0.2) notes.push('The surface isn\'t listed for part of this trail. Those parts show as a dashed line.');
-    if (grp.miListed && grp.len && Math.abs(grp.miListed * 1609.344 - grp.len) / grp.len > 0.15) notes.push(`The state lists this trail as ${grp.miListed.toFixed(1)} mi, but the drawn line measures ${fmtMi(grp.len)}.`);
-    if (grp.upd) notes.push(`From Florida's official trail inventory, last updated ${new Date(grp.upd).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}.`);
-    notes.push('The line is drawn exactly as the state publishes it. Nothing is guessed or filled in.');
+    if (grp.miListed && grp.len && Math.abs(grp.miListed * 1609.344 - grp.len) / grp.len > 0.15) notes.push(`${src === 'pbc' ? 'The county' : 'The state'} lists this trail as ${grp.miListed.toFixed(1)} mi, but the drawn line measures ${fmtMi(grp.len)}.`);
+    if (src === 'pbc') {
+      if (/\(/.test(grp.name)) notes.push('The markers in the name are the ones the county lists for this trail. Follow them on the posts.');
+      notes.push("From Palm Beach County's natural areas trail map, drawn exactly as the county publishes it. Nothing is guessed or filled in.");
+    } else if (src === 'osm') {
+      notes.push('From OpenStreetMap, which volunteers map. No agency map of this place covers its trails, so check the line against the park\'s own map and signs.');
+    } else {
+      if (grp.upd) notes.push(`From Florida's official trail inventory, last updated ${new Date(grp.upd).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}.`);
+      notes.push('The line is drawn exactly as the state publishes it. Nothing is guessed or filled in.');
+    }
     $('#tdNotes').replaceChildren(...notes.map((n) => el('li', { text: n })));
   }
 
@@ -689,7 +981,7 @@
     const facts = [
       el('div', { class: 'fact' }, [el('b', { text: fmtMi(st.total) }), el('span', { text: 'Trails in all' })]),
       el('div', { class: 'fact' }, [el('b', { text: String(nNamed) }), el('span', { text: 'Named trails' })]),
-      el('div', { class: 'fact wide' }, [el('b', { text: agencyLabel(m.info.agency) }), el('span', { text: `Run by · ${m.info.county} County` })]),
+      el('div', { class: 'fact wide' }, [el('b', { text: runBy(m.info) }), el('span', { text: m.info.county ? `Run by · ${m.info.county} County` : 'Run by' })]),
       el('div', { class: 'fact wide' }, [el('b', { text: surfLine(st) || 'Surface not listed' }), el('span', { text: 'Surface, all trails' })]),
     ];
     if (m.info.url) facts.push(el('div', { class: 'fact wide' }, [el('b', null, [el('a', { href: m.info.url, target: '_blank', rel: 'noopener', text: 'Official park page' })]), el('span', { text: 'Hours, fees, closures and rules' })]));
@@ -737,14 +1029,16 @@
     $('#trailDetail').hidden = true; $('#facts').replaceChildren(); $('#trailList').replaceChildren(); $('#warnTarget').replaceChildren();
     if (known) map.fitBounds([[known.bb[0], known.bb[1]], [known.bb[2], known.bb[3]]]);
     areaStatus('Loading the trail lines...');
+    const t0 = performance.now();
     try {
       const r = await loadPark(key, force);
       if (S.park !== key) return;
       const m = r.feats.length ? buildModel(key, r.feats) : null;
-      if (!m) { areaStatus('No trail lines came back for this park. Try Refresh trail data.', true); return; }
+      if (!m) { areaStatus(key.startsWith('osm:') ? 'OpenStreetMap has no trail lines mapped inside this place.' : 'No trail lines came back for this park. Try Refresh trail data.', true); return; }
       m.fetched = r.time;
       S.model = m;
       drawModel(m); renderSheet(m); rememberSaved(m);
+      if (BENCH) $('#areaStatus').textContent += ` Loaded in ${secs(t0)}.`;
       const gi = findGroup(m, trailKey);
       if (gi >= 0) highlightGroup(gi, { noHash: true });
       else {
@@ -1041,12 +1335,12 @@
   function init() {
     setRadius(S.radius);
     setMode(S.mode);
-    const who = store.get('who', 'both'); if ([...$('#whoFilter').options].some((o) => o.value === who)) $('#whoFilter').value = who;
+    const who = store.get('who2', 'all'); if ([...$('#whoFilter').options].some((o) => o.value === who)) $('#whoFilter').value = who;
     document.querySelectorAll('.chip').forEach((c) => c.addEventListener('click', () => { setRadius(+c.dataset.r); rediscover(); }));
     $('#nearMe').addEventListener('click', nearMe);
     $('#searchForm').addEventListener('submit', onSearch);
     ['#surfFilter', '#sortBy', '#favOnly'].forEach((s) => $(s).addEventListener('change', renderList));
-    $('#whoFilter').addEventListener('change', () => { store.set('who', $('#whoFilter').value); if (S.radius === 0 || S.center) rediscover(); });
+    $('#whoFilter').addEventListener('change', () => { store.set('who2', $('#whoFilter').value); if (S.radius === 0 || S.center) rediscover(); });
     document.querySelectorAll('.seg button').forEach((b) => b.addEventListener('click', () => { setMode(b.dataset.mode); renderList(); }));
     $('#backBtn').addEventListener('click', () => { history.pushState(null, '', location.pathname); backToFind(); });
     $('#favBtn').addEventListener('click', () => {
