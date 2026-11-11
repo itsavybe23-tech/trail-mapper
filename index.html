@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Trail Mapper</title>
+<meta name="description" content="Find nature trails in South Florida, see each trail's map, and get warned when you drift off the path.">
+<meta name="theme-color" content="#1f4a3a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Trails">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@600;700&display=swap">
+<link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<!-- Off-trail banner (shown over every view while tracking) -->
+<div id="alert" class="alert" role="alert" aria-live="assertive" hidden>
+  <div class="alert-main">
+    <strong id="alertTitle">Off trail</strong>
+    <span id="alertText"></span>
+  </div>
+  <button id="alertRoute" class="btn btn-light" type="button">Show way back</button>
+</div>
+
+<!-- ===== Find view ===== -->
+<section id="viewFind" class="view">
+  <header class="topbar">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M5 24c5-1 6-7 11-8s7-6 11-10" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/><circle cx="27" cy="6" r="3" fill="var(--sun)"/></svg>
+      <h1>Trail Mapper</h1>
+    </div>
+    <p class="tagline">Nature trails across South Florida, from OpenStreetMap.</p>
+  </header>
+
+  <div class="finder">
+    <form id="searchForm" class="search" autocomplete="off">
+      <label for="searchInput" class="sr">Search a park, city or zip</label>
+      <input id="searchInput" type="search" placeholder="Park, city or zip in South Florida" enterkeyhint="search">
+      <button class="btn btn-primary" type="submit">Search</button>
+    </form>
+    <div class="row-wrap">
+      <button id="nearMe" class="btn btn-outline" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4" fill="currentColor"/><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+        Trails near me
+      </button>
+      <div class="chips" role="group" aria-label="Search radius">
+        <button class="chip" data-r="8047" type="button">5 mi</button>
+        <button class="chip" data-r="24140" type="button">15 mi</button>
+        <button class="chip" data-r="48280" type="button">30 mi</button>
+      </div>
+    </div>
+    <div class="row-wrap filters">
+      <label class="sel"><span>Surface</span>
+        <select id="surfFilter">
+          <option value="any">Any</option>
+          <option value="easy">Boardwalk or paved</option>
+          <option value="natural">Natural ground</option>
+        </select>
+      </label>
+      <label class="sel"><span>Sort</span>
+        <select id="sortBy">
+          <option value="dist">Closest first</option>
+          <option value="len">Longest first</option>
+          <option value="name">A to Z</option>
+        </select>
+      </label>
+      <label class="check"><input id="favOnly" type="checkbox"> Favorites only</label>
+    </div>
+  </div>
+
+  <div id="searchResults" class="results" hidden></div>
+  <p id="findStatus" class="status" aria-live="polite"></p>
+  <ol id="areaList" class="area-list"></ol>
+
+  <section id="savedBlock" class="saved" hidden>
+    <h2>Saved on this phone</h2>
+    <p class="muted">These open without signal.</p>
+    <ol id="savedList" class="area-list"></ol>
+  </section>
+
+  <footer class="foot">
+    <p>Trail lines come from OpenStreetMap volunteers and can be missing or out of date. Always follow park maps, signs and trail markers.</p>
+    <p>Map data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a>.</p>
+  </footer>
+</section>
+
+<!-- ===== Trail map view ===== -->
+<section id="viewArea" class="view view-map" hidden>
+  <div id="map" class="map" aria-label="Trail map"></div>
+
+  <div class="maptop">
+    <button id="backBtn" class="iconbtn" type="button" aria-label="Back to trail list">
+      <svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <div class="maptitle">
+      <h2 id="areaName">Trail map</h2>
+      <span id="gpsChip" class="gps-chip" hidden></span>
+    </div>
+    <button id="favBtn" class="iconbtn" type="button" aria-label="Add to favorites" aria-pressed="false">
+      <svg viewBox="0 0 24 24"><path d="M12 3.5l2.6 5.3 5.8.8-4.2 4.1 1 5.8L12 16.8l-5.2 2.7 1-5.8-4.2-4.1 5.8-.8z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+    </button>
+  </div>
+
+  <div class="mapfabs">
+    <button id="followBtn" class="fab" type="button" aria-pressed="false" aria-label="Follow my position">
+      <svg viewBox="0 0 24 24"><path d="M12 2l7 19-7-4-7 4z" fill="currentColor"/></svg>
+    </button>
+    <button id="fitBtn" class="fab" type="button" aria-label="Show the whole area">
+      <svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+    </button>
+  </div>
+
+  <div id="sheet" class="sheet" data-open="true">
+    <button id="sheetHandle" class="sheet-handle" type="button" aria-label="Show or hide trail details"><span></span></button>
+    <div class="sheet-body">
+      <p id="areaStatus" class="status" aria-live="polite"></p>
+
+      <div class="actions">
+        <button id="trackBtn" class="btn btn-primary" type="button">Start hike</button>
+        <button id="homeBtn" class="btn btn-outline" type="button">Way back to parking</button>
+      </div>
+
+      <div id="facts" class="facts"></div>
+
+      <div class="field">
+        <label for="warnTarget">Warn me when I leave</label>
+        <select id="warnTarget"></select>
+      </div>
+      <div class="field">
+        <label for="warnDist">Warn after</label>
+        <select id="warnDist">
+          <option value="20">20 m off the path</option>
+          <option value="30" selected>30 m off the path</option>
+          <option value="50">50 m off the path</option>
+        </select>
+      </div>
+      <label class="check"><input id="soundOn" type="checkbox" checked> Beep and vibrate when I go off trail</label>
+
+      <h3>Trails here</h3>
+      <ol id="trailList" class="trail-list"></ol>
+
+      <div class="legend" aria-label="Map legend">
+        <span><i class="sw sw-board"></i>Boardwalk</span>
+        <span><i class="sw sw-paved"></i>Paved</span>
+        <span><i class="sw sw-nat"></i>Natural ground</span>
+        <span><i class="sw sw-unk"></i>Surface not mapped</span>
+        <span><i class="dot dot-p">P</i>Parking</span>
+      </div>
+
+      <div class="actions small">
+        <a id="dirLink" class="btn btn-outline" target="_blank" rel="noopener">Directions to parking</a>
+        <button id="gpxBtn" class="btn btn-outline" type="button">Download GPX</button>
+        <button id="refreshBtn" class="btn btn-ghost" type="button">Refresh trail data</button>
+      </div>
+      <p class="muted fine">Before you go, open this map with signal and zoom around the trails once. The app keeps the trail lines and the map pieces you viewed for offline use.</p>
+    </div>
+  </div>
+</section>
+
+<script src="vendor/leaflet/leaflet.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
