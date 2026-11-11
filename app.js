@@ -254,7 +254,7 @@
   const errWord = (e) => (e && e.name === 'AbortError' ? 'it timed out' : (e && e.message) || 'no answer');
 
   function agencySql() {
-    const who = $('#whoFilter').value;
+    const who = ($('#whoFilter') || {}).value || 'both';
     return who === 'state' ? STATE_SQL : who === 'county' ? COUNTY_SQL : `(${STATE_SQL} OR ${COUNTY_SQL})`;
   }
 
@@ -262,7 +262,7 @@
     const all = S.radius === 0;
     if (!all) { S.center = { lat, lon, label }; store.set('center', S.center); }
     const where = `${agencySql()} AND ${FOOT_SQL} AND COUNTY IN (${SF_COUNTIES.map((c) => `'${sql(c)}'`).join(',')})`;
-    const key = `disc:${DATA_V}:${all ? 'all' : lat.toFixed(2) + ',' + lon.toFixed(2) + ',' + S.radius}:${$('#whoFilter').value}`;
+    const key = `disc:${DATA_V}:${all ? 'all' : lat.toFixed(2) + ',' + lon.toFixed(2) + ',' + S.radius}:${($('#whoFilter') || {}).value || 'both'}`;
     const where2 = all ? 'all of South Florida' : `${fmtMi(S.radius)} of ${label}`;
     $('#areaList').replaceChildren();
     const hit = await cacheGet(key, 7 * DAY);
@@ -1079,7 +1079,7 @@
     else findStatus('Tap Trails near me, pick All South Florida, or search a park, trail or city.');
     renderSaved();
     route();
-    if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+    if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then((r) => r.update()).catch(() => {});
   }
 
   if (typeof window.__TM_TEST__ !== 'undefined') window.__TM_TEST__ = { slim, buildParks, buildModel, groupShape, nearestOnSegs, surfClass, agencyKind, fmtMi };

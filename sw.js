@@ -3,7 +3,7 @@
 const SHELL = 'tm-shell-v3';
 const TILES = 'tm-tiles-v1';
 const MAX_TILES = 4000;
-const SHELL_FILES = ['./', 'index.html', 'app.css?v=4', 'app.js?v=4', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'icon-180.png', 'vendor/leaflet/leaflet.js', 'vendor/leaflet/leaflet.css'];
+const SHELL_FILES = ['./', 'index.html', 'app4.css', 'app4.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'icon-180.png', 'vendor/leaflet/leaflet.js', 'vendor/leaflet/leaflet.css'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(SHELL).then((c) => c.addAll(SHELL_FILES.map((f) => new Request(f, { cache: 'reload' })))).catch(() => {}).then(() => self.skipWaiting()));
