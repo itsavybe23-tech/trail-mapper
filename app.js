@@ -1105,6 +1105,7 @@ foreach.c->.p(
     const sh = $('#sheet'), full = $('#viewArea').classList.contains('full');
     const cover = !full && window.innerWidth < 900 && sh.dataset.open !== 'false' ? Math.min(sh.offsetHeight, window.innerHeight * 0.62) : 0;
     const bottom = Math.min(cover + 20, Math.max(40, window.innerHeight - 260));
+    if (BENCH) $('#map').setAttribute('aria-label', `Trail map (pad ${bottom}, sheet ${sh.offsetHeight}, w ${window.innerWidth}, h ${window.innerHeight}, open ${sh.dataset.open}, full ${full})`);
     return { paddingTopLeft: [40, 80], paddingBottomRight: [40, bottom], maxZoom: 17 };
   }
   function setFull(on) {
