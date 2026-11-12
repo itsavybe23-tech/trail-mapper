@@ -49,6 +49,7 @@
   const DAY = 864e5;
   const DATA_V = 'v5';
   const QS = location.search;
+  const APP_V = '9'; // shown in the footer, so we can tell which update a phone is running
   const BENCH = /[?&]bench\b/.test(QS); // for timing: skip saved data and show how long each load took
   const LEGACY = /[?&]legacy\b/.test(QS);
   const qnum = (k, d) => { const m = QS.match(new RegExp('[?&]' + k + '=([0-9.]+)')); return m && BENCH ? m[1] : d; }; // timing knobs, bench only
@@ -1111,6 +1112,8 @@ foreach.c->.p(
   function setFull(on) {
     const v = $('#viewArea'), b = $('#fitBtn'), d = document, de = d.documentElement;
     v.classList.toggle('full', on);
+    // Hide the panel directly too, so it goes away even if the phone still holds an older style file.
+    $('#sheet').style.display = on ? 'none' : '';
     b.setAttribute('aria-pressed', String(on));
     b.setAttribute('aria-label', on ? 'Exit full screen map' : 'Full screen map');
     b.innerHTML = on ? EXIT_SVG : FULL_SVG;
@@ -1433,6 +1436,15 @@ foreach.c->.p(
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') wakeLock(); });
     window.addEventListener('popstate', route);
     window.addEventListener('hashchange', route);
+
+    $('#appVer').textContent = 'App version ' + APP_V;
+    // If the server has a newer update than this copy, load it once.
+    fetch('./?vcheck=' + Date.now(), { cache: 'no-store' }).then((r) => (r.ok ? r.text() : '')).then((t) => {
+      const mv = /app5\.js\?v=(\d+)/.exec(t || '');
+      if (!mv || +mv[1] <= +APP_V) return;
+      try { if (sessionStorage.getItem('tm-upd') === mv[1]) return; sessionStorage.setItem('tm-upd', mv[1]); } catch (e) { return; }
+      location.reload();
+    }).catch(() => {});
 
     const c = store.get('center', null);
     if (S.radius === 0) discover(null, null, 'South Florida');

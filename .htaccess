@@ -1,0 +1,6 @@
+# Trail Mapper: make phones check for a newer copy of the app's own files.
+<IfModule mod_headers.c>
+  <FilesMatch "\.(html|js|css|webmanifest)$">
+    Header set Cache-Control "no-cache"
+  </FilesMatch>
+</IfModule>
