@@ -259,3 +259,6 @@ h1, h2, h3 { font-family: var(--f-display); letter-spacing: .01em; text-wrap: ba
 
 .more { list-style: none; margin-top: 10px; }
 .more .btn { width: 100%; }
+
+/* Full screen map: the sheet slides fully away. */
+.view-map.full .sheet { transform: translateY(calc(100% + 24px)); pointer-events: none; }

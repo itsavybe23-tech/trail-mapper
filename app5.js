@@ -1091,7 +1091,41 @@ foreach.c->.p(
     const b = $('#favBtn'); b.setAttribute('aria-pressed', String(on)); b.setAttribute('aria-label', on ? 'Remove from favorites' : 'Add to favorites');
   }
 
+  /* Full screen map: hides the trail sheet (and uses the browser's full screen where the phone allows it), then fits the chosen trail. */
+  const FULL_SVG = '<svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>';
+  const EXIT_SVG = '<svg viewBox="0 0 24 24"><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>';
+  function fitCurrent() {
+    const m = S.model; if (!m || !S.map) return;
+    if (S.follow && S.me) { S.map.setView(S.me, Math.max(S.map.getZoom(), 17)); return; }
+    const grp = S.selected != null ? m.groups[S.selected] : null;
+    S.map.fitBounds(grp ? groupBounds(m, grp) : m.bounds, { padding: [40, 40], maxZoom: 17 });
+  }
+  function setFull(on) {
+    const v = $('#viewArea'), b = $('#fitBtn'), d = document, de = d.documentElement;
+    v.classList.toggle('full', on);
+    b.setAttribute('aria-pressed', String(on));
+    b.setAttribute('aria-label', on ? 'Exit full screen map' : 'Full screen map');
+    b.innerHTML = on ? EXIT_SVG : FULL_SVG;
+    try {
+      const fsEl = d.fullscreenElement || d.webkitFullscreenElement;
+      if (on && !fsEl) {
+        const req = de.requestFullscreen || de.webkitRequestFullscreen;
+        if (req) { S.fsApi = true; const p = req.call(de); if (p && p.catch) p.catch(() => { S.fsApi = false; }); }
+      } else if (!on && fsEl) {
+        S.fsApi = false;
+        const ex = d.exitFullscreen || d.webkitExitFullscreen;
+        if (ex) { const p = ex.call(d); if (p && p.catch) p.catch(() => {}); }
+      }
+    } catch (e) { S.fsApi = false; }
+    setTimeout(() => { if (S.map) { S.map.invalidateSize(); fitCurrent(); } }, 320);
+  }
+  function openSheet() {
+    if ($('#viewArea').classList.contains('full')) setFull(false);
+    $('#sheet').dataset.open = 'true';
+  }
+
   function backToFind() {
+    if ($('#viewArea').classList.contains('full')) setFull(false);
     stopTracking(true); clearHike();
     $('#viewArea').hidden = true; $('#viewFind').hidden = false;
     S.park = null; S.model = null;
@@ -1171,7 +1205,7 @@ foreach.c->.p(
       $('#hikeText').textContent = txt;
       $('#hikeStats').hidden = false;
       $('#walkGpx').hidden = h.pts.length < 2;
-      $('#sheet').dataset.open = 'true';
+      openSheet();
     }
   }
 
@@ -1298,7 +1332,7 @@ foreach.c->.p(
     S.map.fitBounds(L.latLngBounds(line), { padding: [50, 50], maxZoom: 18 });
     setFollow(false);
     areaStatus(`Way back to ${best.p.name}: about ${fmtMi(best.tot + near.d)} along the trails (blue line).`);
-    $('#sheet').dataset.open = 'true';
+    openSheet();
   }
 
   function closestNode(m, lat, lon) {
@@ -1371,13 +1405,16 @@ foreach.c->.p(
       store.set('favs', S.favs); setFav();
     });
     $('#followBtn').addEventListener('click', () => { if (!S.me) { areaStatus('Tap Start trail to see your position.'); return; } setFollow(!S.follow); });
-    $('#fitBtn').addEventListener('click', () => { if (S.model) S.map.fitBounds(S.model.bounds, { padding: [30, 30] }); setFollow(false); });
+    $('#fitBtn').addEventListener('click', () => setFull(!$('#viewArea').classList.contains('full')));
+    ['fullscreenchange', 'webkitfullscreenchange'].forEach((ev) => document.addEventListener(ev, () => {
+      if (!(document.fullscreenElement || document.webkitFullscreenElement) && S.fsApi) { S.fsApi = false; if ($('#viewArea').classList.contains('full')) setFull(false); }
+    }));
     $('#trackBtn').addEventListener('click', () => (S.watchId == null ? startTracking() : stopTracking(false)));
     $('#walkGpx').addEventListener('click', walkGpx);
     $('#allTrailsBtn').addEventListener('click', () => highlightGroup(null));
     $('#homeBtn').addEventListener('click', routeHome);
     $('#alertRoute').addEventListener('click', () => { if (S.me && S.offLine) { S.map.fitBounds(S.offLine.getBounds(), { padding: [60, 60], maxZoom: 19 }); setFollow(false); } });
-    $('#sheetHandle').addEventListener('click', () => { const s = $('#sheet'); s.dataset.open = s.dataset.open === 'true' ? 'false' : 'true'; });
+    $('#sheetHandle').addEventListener('click', () => { const s = $('#sheet'); if ($('#viewArea').classList.contains('full')) { openSheet(); return; } s.dataset.open = s.dataset.open === 'true' ? 'false' : 'true'; });
     $('#warnTarget').addEventListener('change', () => { if (S.park) store.set('warn:' + S.park, $('#warnTarget').value); S.offCount = 0; });
     $('#gpxBtn').addEventListener('click', gpx);
     $('#refreshBtn').addEventListener('click', () => {
