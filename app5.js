@@ -913,7 +913,7 @@ foreach.c->.p(
     const grp = gIdx == null ? null : m.groups[gIdx];
     if (grp) {
       L.polyline(grp.ways.map((wi) => m.ways[wi].ll), { color: C.sun, weight: 12, opacity: 0.55, interactive: false }).addTo(S.halo);
-      if (!opts.noFit) S.map.fitBounds(groupBounds(m, grp), { padding: [40, 40], maxZoom: 17 });
+      if (!opts.noFit) S.map.fitBounds(groupBounds(m, grp), fitPad());
       const sel = $('#warnTarget');
       if ([...sel.options].some((o) => o.value === grp.key)) sel.value = grp.key;
       S.offCount = 0;
@@ -1098,7 +1098,14 @@ foreach.c->.p(
     const m = S.model; if (!m || !S.map) return;
     if (S.follow && S.me) { S.map.setView(S.me, Math.max(S.map.getZoom(), 17)); return; }
     const grp = S.selected != null ? m.groups[S.selected] : null;
-    S.map.fitBounds(grp ? groupBounds(m, grp) : m.bounds, { padding: [40, 40], maxZoom: 17 });
+    S.map.fitBounds(grp ? groupBounds(m, grp) : m.bounds, fitPad());
+  }
+  // Keep the chosen trail clear of the top bar and, on a phone, of the open trail panel.
+  function fitPad() {
+    const sh = $('#sheet'), full = $('#viewArea').classList.contains('full');
+    const cover = !full && window.innerWidth < 900 && sh.dataset.open !== 'false' ? Math.min(sh.offsetHeight, window.innerHeight * 0.62) : 0;
+    const bottom = Math.min(cover + 20, Math.max(40, window.innerHeight - 260));
+    return { paddingTopLeft: [40, 80], paddingBottomRight: [40, bottom], maxZoom: 17 };
   }
   function setFull(on) {
     const v = $('#viewArea'), b = $('#fitBtn'), d = document, de = d.documentElement;
